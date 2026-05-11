@@ -1,0 +1,56 @@
+name: Deploy CivicNexus CloudFormation Stack
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: Deploy Main CivicNexus Stack
+        run: |
+          aws cloudformation deploy \
+            --stack-name ${{ secrets.GROUP_NAME }}-civicnexus-stack \
+            --template-file cfstack.yml \
+            --capabilities CAPABILITY_IAM \
+            --parameter-overrides \
+              GroupName=${{ secrets.GROUP_NAME }} \
+              GroupSize=${{ secrets.GROUP_SIZE }} \
+              KeyName=${{ secrets.KEY_NAME }}
+
+      - name: Install MongoDB Shell
+        run: |
+          wget -qO- https://www.mongodb.org/static/pgp/server-7.0.asc | sudo tee /etc/apt/trusted.gpg.d/server-7.0.asc
+          echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-7.0.list
+          sudo apt-get update
+          sudo apt-get install -y mongodb-mongosh
+
+      - name: Get MongoDB Server Public IP
+        id: getDBIp
+        run: |
+          DB_IP=$(aws cloudformation describe-stacks \
+            --stack-name ${{ secrets.GROUP_NAME }}-civicnexus-stack \
+            --query "Stacks[0].Outputs[?OutputKey=='MongoServerPublicIP'].OutputValue" \
+            --output text)
+          echo "DB_SERVER_IP=$DB_IP" >> $GITHUB_ENV
+          
+      - name: Load Data into MongoDB
+        run: |
+          echo "Attempting to connect to the database at $DB_SERVER_IP and load data..."
+          # Note: The UserData script on the EC2 instance can take a minute to run.
+          # We add a sleep here to give it time to install and start MongoDB before we try to connect.
+          sleep 60 
+          mongosh "mongodb://${{ env.DB_SERVER_IP }}:27017" < DBLoad.js
+
+
